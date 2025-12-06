@@ -1,16 +1,21 @@
 #include <Arduino.h>
 #include <ArduinoOTA.h>
+#include <ArduinoJson.h>
 #include <WiFi.h>
 #include "secrets.h"
 #include <PubSubClient.h>
+#include <HTTPClient.h>
+#include <stdarg.h>
 
 WiFiClientSecure esp_client;
 PubSubClient mqtt_client(esp_client);
 const int mqtt_port = 8883;
-const char *mqtt_topic = "/hello";
+
+// MQTT Topics
+const char *MQTT_DEBUG_TOPIC = "/debug";
 
 // Root CA Certificate
-// Load DigiCert Global Root G2, which is used by EMQX Public Broker: broker.emqx.io
+// Load DigiCert Global Root G2, which is used by EMQX Broker
 const char *ca_cert = R"EOF(
 -----BEGIN CERTIFICATE-----
 MIIDjjCCAnagAwIBAgIQAzrx5qcRqaC7KGSxHQn65TANBgkqhkiG9w0BAQsFADBh
@@ -39,26 +44,25 @@ MrY=
 void connectToWifi()
 {
   WiFi.begin(WIFI_SSID, WIFI_PASS);
-  Serial.println("wifi connecting");
+  Serial.print("Wifi connecting...");
   while (WiFi.status() != WL_CONNECTED)
   {
     delay(500);
-    Serial.println(".");
+    Serial.print(".");
   }
-  Serial.println("connected");
+  Serial.println("Connected");
 }
 
 void connectToMQTT()
 {
   while (!mqtt_client.connected())
   {
-    String client_id = "raspberry-pi-picow-client-" + String(WiFi.macAddress());
+    String client_id = "raspberry_pi_picow_client_" + String(WiFi.macAddress());
     Serial.printf("Connecting to MQTT Broker as %s...\n", client_id.c_str());
     if (mqtt_client.connect(client_id.c_str(), MQTT_USERNAME, MQTT_PASS))
     {
       Serial.println("Connected to MQTT broker");
-      mqtt_client.subscribe(mqtt_topic);
-      mqtt_client.publish(mqtt_topic, "Hi EMQX I'm ESP32 ^^");
+      mqtt_client.publish(MQTT_DEBUG_TOPIC, "Connected to MQTT broker");
     }
     else
     {
@@ -116,6 +120,49 @@ void setUpOTA()
   ArduinoOTA.begin();
 }
 
+void updateDeviceList()
+{
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    WiFiClientSecure client;
+    client.setInsecure();
+
+    HTTPClient https;
+
+    if (https.begin(client, DB_API_URL))
+    {
+
+      https.addHeader("x-api-key", DB_API_KEY);
+      https.addHeader("Content-Type", "application/json");
+
+      int httpCode = https.GET();
+
+      if (httpCode > 0)
+      {
+        if (httpCode == HTTP_CODE_OK)
+        {
+          String payload = https.getString();
+          Serial.println(payload);
+
+          JsonDocument doc;
+          DeserializationError error = deserializeJson(doc, payload);
+
+          if (!error)
+          {
+            const char *message = doc["message"];
+            Serial.print(message);
+          }
+        }
+      }
+      else
+      {
+        Serial.printf("Error: %s\n", https.errorToString(httpCode).c_str());
+      }
+      https.end();
+    }
+  }
+}
+
 void setup()
 {
   Serial.begin(115200);
@@ -131,6 +178,7 @@ void setup()
 
   connectToMQTT();
   setUpOTA();
+  updateDeviceList();
 }
 
 void loop()
